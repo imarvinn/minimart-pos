@@ -1404,8 +1404,17 @@ let todayExpenses = [];
       startingFund = parseFloat(newFund) || 0;
       localStorage.setItem('mm_starting_fund', startingFund);
 
-      const todayValid = salesList.filter(s => s.isToday === 1 && s.status !== 'VOIDED');
-      const todayVoided = salesList.filter(s => s.isToday === 1 && s.status === 'VOIDED');
+      const now = new Date();
+const todayStr = now.toISOString().slice(0, 10);
+
+const todayValid = salesList.filter(s => {
+  const saleDate = (s.created_at || '').slice(0, 10);
+  return (s.isToday === 1 || saleDate === todayStr) && s.status !== 'VOIDED';
+});
+const todayVoided = salesList.filter(s => {
+  const saleDate = (s.created_at || '').slice(0, 10);
+  return (s.isToday === 1 || saleDate === todayStr) && s.status === 'VOIDED';
+});
 
       const cashSales = todayValid.filter(s => s.payment_method === 'CASH').reduce((sum, s) => sum + s.total, 0);
       const gcashSales = todayValid.filter(s => s.payment_method.includes('GCASH')).reduce((sum, s) => sum + s.total, 0);
