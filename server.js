@@ -196,11 +196,12 @@ app.get('/api/sales', async (req, res) => {
 
 // ================= SECURITY ROUTES =================
 
-const ADMIN_PIN = '1234'; 
+// Store the PIN in a mutable variable in memory
+let CURRENT_ADMIN_PIN = '1234'; 
 
 app.post('/api/verify-pin', (req, res) => {
   const { pin } = req.body;
-  if (pin === ADMIN_PIN) {
+  if (pin === CURRENT_ADMIN_PIN) {
     res.status(200).json({ success: true });
   } else {
     res.status(401).json({ error: 'Incorrect PIN' });
@@ -209,9 +210,13 @@ app.post('/api/verify-pin', (req, res) => {
 
 app.put('/api/settings/pin', (req, res) => {
   const { currentPin, newPin } = req.body;
-  if (currentPin !== ADMIN_PIN) {
+  
+  if (currentPin !== CURRENT_ADMIN_PIN) {
     return res.status(401).json({ error: 'Current PIN is incorrect.' });
   }
+  
+  // Update the active PIN
+  CURRENT_ADMIN_PIN = newPin;
   res.json({ success: true });
 });
 
