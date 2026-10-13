@@ -196,15 +196,57 @@ app.get('/api/sales', async (req, res) => {
 
 // ================= SECURITY ROUTES =================
 
-// Default POS PIN (Change '1234' to your preferred PIN)
-const ADMIN_PIN = '1234'; 
+// 1. Verify PIN from Supabase
+app.post('/api/verify-pin', async (req, res) => {
+  try {
+    const { pin } = req.body;
+    
+    // Fetch the permanent PIN from the database
+    const { data, error } = await supabase
+      .from('settings')
+      .select('pin_code')
+      .eq('id', 1)
+      .single();
 
-app.post('/api/verify-pin', (req, res) => {
-  const { pin } = req.body;
-  if (pin === ADMIN_PIN) {
-    res.status(200).json({ success: true });
-  } else {
-    res.status(401).json({ error: 'Incorrect PIN' });
+    if (error) throw error;
+
+    if (data && data.pin_code === pin) {
+      res.status(200).json({ success: true });
+    } else {
+      res.status(401).json({ error: 'Incorrect PIN' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Update PIN permanently in Supabase
+app.put('/api/settings/pin', async (req, res) => {
+  try {
+    const { currentPin, newPin } = req.body;
+    
+    // Check if current PIN matches the database
+    const { data: currentData } = await supabase
+      .from('settings')
+      .select('pin_code')
+      .eq('id', 1)
+      .single();
+      
+    if (!currentData || currentData.pin_code !== currentPin) {
+      return res.status(401).json({ error: 'Current PIN is incorrect.' });
+    }
+    
+    // Save the new PIN permanently
+    const { error: updateError } = await supabase
+      .from('settings')
+      .update({ pin_code: newPin })
+      .eq('id', 1);
+      
+    if (updateError) throw updateError;
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
