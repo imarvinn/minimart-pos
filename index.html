@@ -1,0 +1,1655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Minimart POS & Inventory (SQLite)</title>
+  <script src="/tailwind.js"></script>
+  <style>
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #receipt-print-area, #receipt-print-area * {
+        visibility: visible;
+      }
+      #receipt-print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 58mm;
+        padding: 4mm;
+        margin: 0;
+        box-shadow: none;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased text-gray-800">
+
+  <!-- ================= FULL-SCREEN LOCK OVERLAY ================= -->
+  <div id="lock-screen" class="fixed inset-0 z-50 bg-slate-900 flex flex-col items-center justify-center p-4 no-print select-none">
+    <div class="bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-8 w-full max-w-sm text-center">
+      <div class="w-14 h-14 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mx-auto mb-3 text-2xl">
+        🔒
+      </div>
+      <h2 class="text-2xl font-bold text-white tracking-tight">MiniMart POS</h2>
+      <p class="text-xs text-gray-400 mt-1 mb-5">Terminal Locked — Enter PIN to Continue</p>
+
+      <input type="password" id="lock-pin-input" readonly placeholder="••••"
+        class="w-full bg-slate-900 border border-slate-700 rounded-xl py-3 px-4 text-center text-2xl tracking-[0.5em] text-emerald-400 font-mono mb-2 outline-none">
+      <div id="lock-error" class="text-xs text-red-400 h-4 mb-3 font-medium"></div>
+
+      <div class="grid grid-cols-3 gap-2.5 text-white font-bold text-lg">
+        <button onclick="appendPin('1')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">1</button>
+        <button onclick="appendPin('2')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">2</button>
+        <button onclick="appendPin('3')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">3</button>
+        <button onclick="appendPin('4')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">4</button>
+        <button onclick="appendPin('5')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">5</button>
+        <button onclick="appendPin('6')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">6</button>
+        <button onclick="appendPin('7')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">7</button>
+        <button onclick="appendPin('8')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">8</button>
+        <button onclick="appendPin('9')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">9</button>
+        <button onclick="clearPin()" class="py-3.5 bg-red-900/50 hover:bg-red-800/60 text-red-300 text-xs rounded-xl transition">CLEAR</button>
+        <button onclick="appendPin('0')" class="py-3.5 bg-slate-700 hover:bg-slate-600 active:bg-emerald-600 rounded-xl transition">0</button>
+        <button onclick="unlockScreen()" class="py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm rounded-xl transition">ENTER</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MAIN POS INTERFACE ================= -->
+  <div class="flex h-screen overflow-hidden no-print">
+    
+    <!-- Sidebar -->
+    <aside class="w-64 bg-slate-900 text-white flex flex-col justify-between p-4 shadow-lg">
+      <div>
+        <h1 class="text-2xl font-bold tracking-tight text-emerald-400 mb-6">MiniMart POS</h1>
+        <nav class="space-y-2">
+          <button id="nav-pos" onclick="switchTab('pos')" class="w-full text-left py-2.5 px-4 rounded-lg bg-emerald-600 font-medium transition">
+            Point of Sale
+          </button>
+          <button id="nav-inv" onclick="switchTab('inv')" class="w-full flex items-center justify-between py-2.5 px-4 rounded-lg hover:bg-slate-800 text-gray-300 font-medium transition">
+            <span>Inventory Stock</span>
+            <span id="low-stock-badge" class="hidden px-2 py-0.5 text-xs font-extrabold bg-red-600 text-white rounded-full">0</span>
+          </button>
+          <button id="nav-reports" onclick="switchTab('reports')" class="w-full text-left py-2.5 px-4 rounded-lg hover:bg-slate-800 text-gray-300 font-medium transition">
+            Sales & Profit
+          </button>
+        </nav>
+      </div>
+
+      <div class="space-y-2 border-t border-slate-800 pt-4">
+        <button onclick="lockScreen()" class="w-full py-2 px-3 bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded-lg text-xs font-bold transition border border-red-500/30">
+          🔒 Lock Screen (F9)
+        </button>
+        <button onclick="openPinModal()" class="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg text-xs font-semibold transition border border-slate-700">
+          🔑 Change Manager PIN
+        </button>
+        <button onclick="openStoreSettingsModal()" class="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-emerald-400 rounded-lg text-xs font-semibold transition border border-slate-700">
+          🏪 Store Receipt Header
+        </button>
+        <a href="/api/backup" class="block w-full text-center py-2 px-3 bg-slate-800 hover:bg-slate-700 text-gray-200 rounded-lg text-xs font-semibold transition border border-slate-700">
+          💾 Backup Database (.db)
+        </a>
+        <div class="text-xs text-emerald-400 font-mono pt-1">● Connected: minimart.db</div>
+      </div>
+    </aside>
+
+    <!-- Main View -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+      <!-- POS TAB -->
+      <section id="view-pos" class="flex-1 flex overflow-hidden">
+        <div class="flex-1 p-6 flex flex-col overflow-hidden">
+          
+          <div class="flex gap-3 mb-3">
+            <input type="text" id="barcode-input" placeholder="Scan barcode (press Enter) or type to filter products..."
+              class="flex-1 px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-emerald-500 outline-none"
+              oninput="renderPosProducts()"
+              onkeydown="handleBarcodeScan(event)">
+            <button onclick="clearPosSearch()" class="px-4 py-3 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50">
+              Reset Filter
+            </button>
+          </div>
+
+          <div id="pos-category-tabs" class="flex gap-2 overflow-x-auto pb-3 mb-2"></div>
+
+          <div id="pos-product-grid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto pb-6"></div>
+        </div>
+
+        <!-- Checkout Cart Panel -->
+        <div class="w-96 bg-white border-l border-gray-200 flex flex-col justify-between shadow-xl">
+          
+          <!-- Cart Header with Hold / Resume Controls -->
+          <div class="p-3 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+            <h2 class="text-base font-bold text-gray-800">Current Order</h2>
+            <div class="flex items-center gap-1.5">
+              <button onclick="holdCurrentOrder()" title="Park current cart for later (F8)"
+                class="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-800 rounded text-[11px] font-bold transition">
+                ⏸️ Hold (F8)
+              </button>
+              <button id="btn-held-orders" onclick="openHeldModal()"
+                class="hidden px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-bold transition animate-pulse">
+                ▶️ Held (0)
+              </button>
+              <button onclick="clearCart()" class="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded font-semibold">
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <!-- Cart Items -->
+          <div id="cart-items" class="flex-1 overflow-y-auto p-3 space-y-2"></div>
+
+          <!-- Checkout & Payment Controls -->
+          <div class="p-3.5 border-t border-gray-200 bg-gray-50 space-y-2 text-sm">
+            <div class="flex justify-between text-gray-600 text-xs">
+              <span>Subtotal:</span>
+              <span id="cart-subtotal" class="font-semibold">₱0.00</span>
+            </div>
+
+            <div class="flex items-center justify-between gap-2">
+              <span class="text-xs text-gray-600 font-medium">Discount:</span>
+              <div class="flex items-center gap-1">
+                <button id="btn-sc-pwd" onclick="toggleScPwdDiscount()" class="px-2 py-0.5 text-[11px] font-semibold border rounded bg-white hover:bg-gray-100 text-gray-700 transition">
+                  SC/PWD 20%
+                </button>
+                <input type="number" id="discount-input" placeholder="₱0.00" min="0" step="1" oninput="manualDiscountChange()"
+                  class="w-20 px-2 py-0.5 border rounded text-right text-xs outline-none focus:ring-1 focus:ring-emerald-500">
+              </div>
+            </div>
+
+            <div class="flex justify-between text-xl font-extrabold text-gray-900 border-t pt-1">
+              <span>Total:</span>
+              <span id="cart-total" class="text-emerald-600">₱0.00</span>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-semibold text-gray-500 uppercase">Payment Method</label>
+              <div class="grid grid-cols-3 gap-1.5 mt-0.5">
+                <!-- CASH BUTTON -->
+                <button id="pay-CASH" onclick="setPaymentMethod('CASH')" class="py-1.5 rounded font-bold text-xs border bg-emerald-600 text-white border-emerald-600 flex items-center justify-center gap-1.5">
+                  <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24">
+                    <path d="M3 6h18v12H3V6zm2 2v8h14V8H5zm7 2a2 2 0 110 4 2 2 0 010-4z"/>
+                  </svg>
+                  <span>CASH</span>
+                </button>
+
+                <!-- GCASH BUTTON (Embedded Vector Logo) -->
+                <button id="pay-GCASH" onclick="setPaymentMethod('GCASH')" class="py-1.5 rounded font-bold text-xs border bg-white text-blue-600 border-gray-300 hover:bg-blue-50 flex items-center justify-center gap-1.5">
+                  <svg class="w-4 h-4 shrink-0" viewBox="0 0 36 36" fill="none">
+                    <rect width="36" height="36" rx="8" fill="#007DFE"/>
+                    <path d="M18.2 10.5C13.8 10.5 10.3 13.9 10.3 18C10.3 22.1 13.8 25.5 18.2 25.5C22.1 25.5 24.9 23.1 25.4 19.3H18.5V16.2H28.8C29 16.9 29.1 17.6 29.1 18.4C29.1 24.3 24.7 28.7 18.2 28.7C12 28.7 7 23.9 7 18C7 12.1 12 7.3 18.2 7.3C21.3 7.3 24 8.4 26 10.3L23.6 12.7C22.2 11.3 20.4 10.5 18.2 10.5Z" fill="white"/>
+                  </svg>
+                  <span>GCash</span>
+                </button>
+
+                <!-- MAYA BUTTON (Embedded Vector Logo) -->
+                <button id="pay-MAYA" onclick="setPaymentMethod('MAYA')" class="py-1.5 rounded font-bold text-xs border bg-white text-emerald-700 border-gray-300 hover:bg-emerald-50 flex items-center justify-center gap-1.5">
+                  <svg class="w-4 h-4 shrink-0" viewBox="0 0 36 36" fill="none">
+                    <rect width="36" height="36" rx="8" fill="#111827"/>
+                    <path d="M8.5 25V11H12.7L18 19.2L23.3 11H27.5V25H23.7V16.4L18.8 23.8H17.2L12.3 16.4V25H8.5Z" fill="#00E699"/>
+                  </svg>
+                  <span>Maya</span>
+                </button>
+              </div>
+            </div>
+
+            <div id="ref-box" class="hidden">
+              <label class="text-xs font-semibold text-blue-700">Ref # (Last 4 Digits)</label>
+              <input type="text" id="payment-ref" maxlength="12" placeholder="e.g. 4829"
+                class="w-full px-3 py-1 border border-blue-300 rounded-md text-right font-mono font-bold outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-xs font-semibold text-gray-600">Amount Tendered</label>
+                <button onclick="setExactTendered()" class="text-[11px] font-bold text-emerald-700 hover:underline">Exact Amount</button>
+              </div>
+              <input type="number" id="tendered-amount" placeholder="0.00" oninput="calculateChange()"
+                class="w-full px-3 py-1.5 border rounded-md text-right text-lg font-bold outline-none focus:ring-2 focus:ring-emerald-500 bg-white">
+              
+              <!-- Quick Cash Denomination Buttons -->
+              <div class="grid grid-cols-6 gap-1 mt-1.5">
+                <button onclick="addCashBill(20)" class="py-1 bg-white hover:bg-emerald-50 border border-gray-300 rounded text-[11px] font-bold text-gray-700 active:bg-emerald-100">+20</button>
+                <button onclick="addCashBill(50)" class="py-1 bg-white hover:bg-emerald-50 border border-gray-300 rounded text-[11px] font-bold text-gray-700 active:bg-emerald-100">+50</button>
+                <button onclick="addCashBill(100)" class="py-1 bg-white hover:bg-emerald-50 border border-gray-300 rounded text-[11px] font-bold text-gray-700 active:bg-emerald-100">+100</button>
+                <button onclick="addCashBill(500)" class="py-1 bg-white hover:bg-emerald-50 border border-gray-300 rounded text-[11px] font-bold text-gray-700 active:bg-emerald-100">+500</button>
+                <button onclick="addCashBill(1000)" class="py-1 bg-white hover:bg-emerald-50 border border-gray-300 rounded text-[11px] font-bold text-gray-700 active:bg-emerald-100">+1K</button>
+                <button onclick="clearTendered()" class="py-1 bg-red-50 hover:bg-red-100 border border-red-200 rounded text-[11px] font-bold text-red-600">CLR</button>
+              </div>
+            </div>
+
+            <div class="flex justify-between text-sm font-semibold text-gray-700 pt-0.5">
+              <span>Change:</span>
+              <span id="cart-change" class="text-base font-extrabold text-gray-900">₱0.00</span>
+            </div>
+
+            <button onclick="processCheckout()" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-md transition">
+              Complete Sale (F10)
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- INVENTORY TAB -->
+      <section id="view-inv" class="hidden flex-1 p-6 flex flex-col overflow-hidden">
+        
+        <div id="inv-alert-banner" class="hidden mb-4 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between text-red-800 text-sm">
+          <div class="flex items-center gap-2">
+            <span class="text-lg">⚠️</span>
+            <span id="inv-alert-text" class="font-semibold">Some products are running low on stock!</span>
+          </div>
+          <button onclick="toggleLowStockFilter()" id="btn-low-stock-filter" class="px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition">
+            Show Low Stock Only
+          </button>
+        </div>
+
+        <div class="flex flex-wrap justify-between items-center gap-4 mb-4">
+          <h2 class="text-2xl font-bold">Inventory Management</h2>
+          <div class="flex items-center gap-2">
+            <input type="text" id="inv-search" placeholder="Search inventory..." oninput="renderInventory()"
+              class="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500">
+            <button onclick="exportInventoryCSV()" class="px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 shadow-sm text-sm">
+              📥 Export Excel (CSV)
+            </button>
+            <button onclick="openProductModal()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 shadow text-sm">
+              + Add Product
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow border border-gray-200 flex-1 overflow-y-auto">
+          <table class="w-full text-left border-collapse">
+            <thead class="bg-gray-50 sticky top-0 border-b text-xs font-semibold uppercase text-gray-500">
+              <tr>
+                <th class="p-3">Barcode</th>
+                <th class="p-3">Name</th>
+                <th class="p-3">Category</th>
+                <th class="p-3">Cost</th>
+                <th class="p-3">Price</th>
+                <th class="p-3">Stock</th>
+                <th class="p-3">Status</th>
+                <th class="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="inventory-table" class="divide-y divide-gray-100 text-sm"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- REPORTS & PROFIT TAB -->
+      <section id="view-reports" class="hidden flex-1 p-6 overflow-y-auto">
+       <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+          <h2 class="text-2xl font-bold">Sales & Profit Dashboard</h2>
+          <div class="flex gap-2">
+            <button onclick="recordExpensePrompt()" class="px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold shadow-sm text-xs">
+              💸 Record Cash-Out / Expense
+            </button>
+            <button onclick="openZReport()" class="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg font-bold shadow-sm text-xs">
+              📊 End-of-Day Z-Report
+            </button>
+            <button onclick="exportSalesCSV()" class="px-3 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg font-semibold hover:bg-gray-50 shadow-sm text-xs">
+              📥 Export CSV
+            </button>
+          </div>
+        </div>
+
+        <!-- Date Range Filter Bar -->
+        <div class="bg-white p-3 rounded-xl shadow-sm border border-gray-200 mb-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex flex-wrap items-center gap-1.5">
+            <span class="font-bold text-gray-500 uppercase mr-1">Filter Period:</span>
+            <button id="flt-TODAY" onclick="setSalesFilter('TODAY')" class="px-3 py-1.5 rounded-lg font-bold bg-emerald-600 text-white">Today</button>
+            <button id="flt-YESTERDAY" onclick="setSalesFilter('YESTERDAY')" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700">Yesterday</button>
+            <button id="flt-WEEK" onclick="setSalesFilter('WEEK')" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700">Last 7 Days</button>
+            <button id="flt-MONTH" onclick="setSalesFilter('MONTH')" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700">This Month</button>
+            <button id="flt-ALL" onclick="setSalesFilter('ALL')" class="px-3 py-1.5 rounded-lg font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700">All Time</button>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <span class="text-gray-500 font-semibold">Custom:</span>
+            <input type="date" id="flt-start" onchange="setSalesFilter('CUSTOM')" class="border rounded px-2 py-1 text-gray-700">
+            <span>to</span>
+            <input type="date" id="flt-end" onchange="setSalesFilter('CUSTOM')" class="border rounded px-2 py-1 text-gray-700">
+          </div>
+        </div>
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <div class="bg-white p-4 rounded-xl shadow border border-gray-200">
+            <div class="text-xs font-semibold text-gray-400 uppercase">Today's Revenue</div>
+            <div id="stat-today-sales" class="text-2xl font-extrabold text-gray-800 mt-1">₱0.00</div>
+          </div>
+          <div class="bg-white p-4 rounded-xl shadow border border-gray-200">
+            <div class="text-xs font-semibold text-gray-400 uppercase">Today's Net Profit</div>
+            <div id="stat-today-profit" class="text-2xl font-extrabold text-emerald-600 mt-1">₱0.00</div>
+          </div>
+          <div class="bg-white p-4 rounded-xl shadow border border-gray-200">
+            <div class="text-xs font-semibold text-gray-400 uppercase">Today's Valid Orders</div>
+            <div id="stat-today-orders" class="text-2xl font-extrabold text-blue-600 mt-1">0</div>
+          </div>
+          <div class="bg-white p-4 rounded-xl shadow border border-gray-200">
+            <div class="text-xs font-semibold text-gray-400 uppercase">All-Time Revenue</div>
+            <div id="stat-all-sales" class="text-2xl font-extrabold text-gray-700 mt-1">₱0.00</div>
+          </div>
+        </div>
+
+        <div class="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
+          <table class="w-full text-left border-collapse">
+            <thead class="bg-gray-50 border-b text-xs font-semibold uppercase text-gray-500">
+              <tr>
+                <th class="p-3">Receipt #</th>
+                <th class="p-3">Date & Time</th>
+                <th class="p-3">Method</th>
+                <th class="p-3">Discount</th>
+                <th class="p-3">Total Paid</th>
+                <th class="p-3">Net Profit</th>
+                <th class="p-3">Status</th>
+                <th class="p-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="reports-table" class="divide-y divide-gray-100 text-sm"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Held / Parked Orders Modal -->
+  <div id="held-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-xl font-bold">Parked / Held Orders</h3>
+        <button onclick="closeHeldModal()" class="text-gray-400 hover:text-gray-600 text-lg font-bold">✕</button>
+      </div>
+      <div id="held-orders-list" class="space-y-3 max-h-80 overflow-y-auto text-sm"></div>
+      <div class="mt-5 text-right">
+        <button onclick="closeHeldModal()" class="px-4 py-2 border rounded-lg text-sm font-semibold">Close</button>
+      </div>
+    </div>
+  </div>
+
+<!-- Item Refund Modal -->
+  <div id="refund-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+      <div class="flex justify-between items-center mb-3">
+        <h3 id="refund-modal-title" class="text-lg font-bold">Refund / Return Items</h3>
+        <button onclick="closeRefundModal()" class="text-gray-400 hover:text-gray-600 font-bold">✕</button>
+      </div>
+      <p class="text-xs text-gray-500 mb-3">Select which item the customer is returning to restock it and calculate cash to return:</p>
+      <div id="refund-items-list" class="space-y-2 max-h-64 overflow-y-auto text-sm"></div>
+      <div class="mt-5 text-right">
+        <button onclick="closeRefundModal()" class="px-4 py-2 border rounded-lg text-sm font-semibold">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Store Receipt Header Settings Modal -->
+  <div id="store-settings-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+      <h3 class="text-xl font-bold mb-1">Store & Receipt Settings</h3>
+      <p class="text-xs text-gray-500 mb-4">Customize what prints at the top of every customer receipt.</p>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Store Name</label>
+          <input type="text" id="set-store-name" placeholder="e.g. Arreglado MiniMart" class="w-full border p-2 rounded-lg">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Store Address</label>
+          <input type="text" id="set-store-address" placeholder="e.g. Brgy. Villamonte, Bacolod City" class="w-full border p-2 rounded-lg">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Contact # / TIN (Optional)</label>
+          <input type="text" id="set-store-contact" placeholder="e.g. Tel: 0917-123-4567 | TIN: 123-456-789" class="w-full border p-2 rounded-lg">
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-3">
+        <button onclick="closeStoreSettingsModal()" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+        <button onclick="saveStoreSettings()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-sm">Save Header</button>
+      </div>
+    </div>
+  </div>
+
+<!-- Custom Quantity Popup Modal -->
+  <div id="qty-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 z-40 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-xs text-center">
+      <h3 id="qty-modal-title" class="text-base font-bold text-gray-800 truncate mb-1">Set Quantity</h3>
+      <p id="qty-modal-stock" class="text-xs text-gray-500 mb-4">Available Stock: 0</p>
+
+      <input type="number" id="qty-modal-input" min="1"
+        onkeydown="if(event.key==='Enter') confirmQtyModal()"
+        class="w-full border-2 border-emerald-500 rounded-xl py-2.5 px-4 text-center text-2xl font-extrabold text-gray-800 outline-none mb-3">
+
+      <!-- Quick Pack / Case Multipliers -->
+      <div class="grid grid-cols-6 gap-1.5 mb-5">
+        <button onclick="setModalQty(1)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">1</button>
+        <button onclick="setModalQty(2)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">2</button>
+        <button onclick="setModalQty(3)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">3</button>
+        <button onclick="setModalQty(6)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">6</button>
+        <button onclick="setModalQty(12)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">12</button>
+        <button onclick="setModalQty(24)" class="py-1.5 bg-gray-100 hover:bg-emerald-50 border rounded-lg text-xs font-bold text-gray-700">24</button>
+      </div>
+
+      <div class="flex gap-2">
+        <button onclick="closeQtyModal()" class="flex-1 py-2 border rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50">Cancel</button>
+        <button onclick="confirmQtyModal()" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold shadow">Apply (Enter)</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Change PIN Modal -->
+  <div id="pin-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-sm">
+      <h3 class="text-xl font-bold mb-1">Change Manager PIN</h3>
+      <p class="text-xs text-gray-500 mb-4">Updates both Lock Screen and Void Sale PIN.</p>
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Current PIN</label>
+          <input type="password" id="current-pin-input" maxlength="8" placeholder="Enter current PIN" class="w-full border p-2.5 rounded-lg font-mono text-center tracking-widest">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">New PIN (4–8 digits)</label>
+          <input type="password" id="new-pin-input" maxlength="8" placeholder="Enter new numeric PIN" class="w-full border p-2.5 rounded-lg font-mono text-center tracking-widest">
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-3">
+        <button onclick="closePinModal()" class="px-4 py-2 border rounded-lg text-sm">Cancel</button>
+        <button onclick="saveNewPin()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-sm">Update PIN</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add / Edit Product Modal -->
+  <div id="product-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center p-4 no-print">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-full max-w-md">
+      <h3 id="modal-title" class="text-xl font-bold mb-4">Add New Product</h3>
+      <input type="hidden" id="prod-id">
+      <div class="space-y-3 text-sm">
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Barcode</label>
+          <input type="text" id="prod-barcode" placeholder="Scan or type barcode..." class="w-full border p-2 rounded">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">Product Name</label>
+          <input type="text" id="prod-name" placeholder="e.g. Century Tuna Flakes 155g" class="w-full border p-2 rounded">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Cost Price (₱)</label>
+            <input type="number" id="prod-cost" placeholder="0.00" step="0.25" class="w-full border p-2 rounded">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Selling Price (₱)</label>
+            <input type="number" id="prod-price" placeholder="0.00" step="0.25" class="w-full border p-2 rounded">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Stock Quantity</label>
+            <input type="number" id="prod-stock" placeholder="0" class="w-full border p-2 rounded">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-gray-600 mb-1">Category</label>
+            <input type="text" id="prod-cat" placeholder="Canned Goods, Snacks..." class="w-full border p-2 rounded">
+          </div>
+        </div>
+      </div>
+      <div class="mt-6 flex justify-end gap-3">
+        <button onclick="closeProductModal()" class="px-4 py-2 border rounded-lg">Cancel</button>
+        <button onclick="saveProduct()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold">Save to DB</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECEIPT PRINT MODAL -->
+  <div id="receipt-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-xl shadow-2xl p-6 w-80 flex flex-col items-center">
+      
+      <div id="receipt-print-area" class="w-full font-mono text-xs text-black bg-white p-2">
+        <div class="text-center border-b border-dashed border-gray-400 pb-2 mb-2">
+          <div id="rec-store-name" class="font-bold text-base uppercase">MINIMART POS</div>
+          <div id="rec-store-address" class="text-[10px] text-gray-600">Bacolod City, Negros Occidental</div>
+          <div id="rec-store-contact" class="text-[10px] text-gray-600"></div>
+          <div id="rec-date" class="text-[10px] text-gray-600 mt-1"></div>
+          <div id="rec-no" class="font-bold text-[11px]"></div>
+          <div id="rec-void-banner" class="hidden mt-1 font-extrabold text-xs border border-black py-0.5">*** VOIDED RECEIPT ***</div>
+        </div>
+
+        <div id="rec-items" class="space-y-1 border-b border-dashed border-gray-400 pb-2 mb-2"></div>
+
+        <div class="space-y-1 text-xs">
+          <div class="flex justify-between">
+            <span>SUBTOTAL:</span>
+            <span id="rec-subtotal"></span>
+          </div>
+          <div id="rec-discount-row" class="flex justify-between text-gray-700">
+            <span>DISCOUNT:</span>
+            <span id="rec-discount"></span>
+          </div>
+          <div class="flex justify-between font-bold text-sm border-t border-dashed border-gray-400 pt-1">
+            <span>TOTAL:</span>
+            <span id="rec-total"></span>
+          </div>
+          <div class="flex justify-between">
+            <span id="rec-method-label">PAID (CASH):</span>
+            <span id="rec-paid"></span>
+          </div>
+          <div class="flex justify-between font-bold">
+            <span>CHANGE:</span>
+            <span id="rec-change"></span>
+          </div>
+        </div>
+
+        <div class="text-center border-t border-dashed border-gray-400 pt-2 mt-3 text-[10px] text-gray-600">
+          Thank you for shopping!<br>Please come again.
+        </div>
+      </div>
+
+      <div class="mt-5 flex gap-2 w-full no-print">
+        <button onclick="closeReceiptModal()" class="flex-1 py-2 border border-gray-300 rounded-lg text-sm font-semibold hover:bg-gray-50">
+          Close (Esc)
+        </button>
+        <button onclick="window.print()" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-bold shadow">
+          🖨️ Print
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let products = [];
+    let cart = [];
+    let heldOrders = [];
+    let salesList = [];
+    let paymentMethod = 'CASH';
+    let isScPwdActive = false;
+    let selectedCategory = 'ALL';
+    let showLowStockOnly = false;
+    let isScreenLocked = true;
+
+    // ================= QUICK CASH & HOLD ORDER CONTROLS =================
+    function addCashBill(amount) {
+      const input = document.getElementById('tendered-amount');
+      const current = parseFloat(input.value) || 0;
+      input.value = (current + amount).toFixed(2);
+      calculateChange();
+    }
+
+    function setExactTendered() {
+      const { total } = getCartTotals();
+      document.getElementById('tendered-amount').value = total > 0 ? total.toFixed(2) : '';
+      calculateChange();
+    }
+
+    function clearTendered() {
+      document.getElementById('tendered-amount').value = '';
+      calculateChange();
+    }
+
+    function holdCurrentOrder() {
+      if (!cart.length) return alert("Cart is empty — nothing to hold.");
+      const note = prompt("Optional customer note/name for this parked order:", `Customer #${heldOrders.length + 1}`);
+      if (note === null) return;
+
+      heldOrders.push({
+        id: Date.now(),
+        note: note || `Customer #${heldOrders.length + 1}`,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        items: [...cart],
+        total: cart.reduce((s, i) => s + (i.price * i.qty), 0)
+      });
+
+      clearCart();
+      updateHeldButton();
+    }
+
+    function updateHeldButton() {
+      const btn = document.getElementById('btn-held-orders');
+      if (heldOrders.length > 0) {
+        btn.innerText = `▶️ Held (${heldOrders.length})`;
+        btn.classList.remove('hidden');
+      } else {
+        btn.classList.add('hidden');
+      }
+    }
+
+    function openHeldModal() {
+      const list = document.getElementById('held-orders-list');
+      if (!heldOrders.length) {
+        list.innerHTML = `<div class="text-center text-gray-400 py-6">No held orders.</div>`;
+      } else {
+        list.innerHTML = heldOrders.map(h => `
+          <div class="p-3 border rounded-xl bg-gray-50 flex items-center justify-between">
+            <div>
+              <div class="font-bold text-gray-800">${h.note} <span class="text-xs font-normal text-gray-400">(${h.time})</span></div>
+              <div class="text-xs text-gray-500">${h.items.reduce((s, i) => s + i.qty, 0)} items • <span class="font-bold text-emerald-600">₱${h.total.toFixed(2)}</span></div>
+            </div>
+            <div class="flex gap-1.5">
+              <button onclick="resumeHeldOrder(${h.id})" class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold">
+                Resume
+              </button>
+              <button onclick="discardHeldOrder(${h.id})" class="px-2.5 py-1.5 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg text-xs font-bold">
+                ✕
+              </button>
+            </div>
+          </div>
+        `).join('');
+      }
+      document.getElementById('held-modal').classList.remove('hidden');
+    }
+
+    function closeHeldModal() {
+      document.getElementById('held-modal').classList.add('hidden');
+    }
+
+    function resumeHeldOrder(id) {
+      if (cart.length > 0 && !confirm("Current cart has items. Replace current cart with this held order?")) return;
+      const idx = heldOrders.findIndex(h => h.id === id);
+      if (idx > -1) {
+        cart = [...heldOrders[idx].items];
+        heldOrders.splice(idx, 1);
+        renderCart();
+        updateHeldButton();
+        closeHeldModal();
+      }
+    }
+
+    function discardHeldOrder(id) {
+      heldOrders = heldOrders.filter(h => h.id !== id);
+      updateHeldButton();
+      openHeldModal();
+    }
+
+    // ================= LOCK SCREEN & PIN CHANGE CONTROLS =================
+    function appendPin(digit) {
+      const input = document.getElementById('lock-pin-input');
+      document.getElementById('lock-error').innerText = '';
+      if (input.value.length < 8) {
+        input.value += digit;
+      }
+    }
+
+    function clearPin() {
+      document.getElementById('lock-pin-input').value = '';
+      document.getElementById('lock-error').innerText = '';
+    }
+
+    function lockScreen() {
+      isScreenLocked = true;
+      clearPin();
+      document.getElementById('lock-screen').classList.remove('hidden');
+    }
+
+    async function unlockScreen() {
+      const pin = document.getElementById('lock-pin-input').value;
+      if (!pin) return;
+
+      const res = await fetch('/api/verify-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
+      });
+
+      if (res.ok) {
+        isScreenLocked = false;
+        document.getElementById('lock-screen').classList.add('hidden');
+        clearPin();
+        document.getElementById('barcode-input').focus();
+      } else {
+        document.getElementById('lock-error').innerText = 'Incorrect PIN! Try again.';
+        document.getElementById('lock-pin-input').value = '';
+      }
+    }
+
+    function openPinModal() {
+      document.getElementById('current-pin-input').value = '';
+      document.getElementById('new-pin-input').value = '';
+      document.getElementById('pin-modal').classList.remove('hidden');
+      document.getElementById('current-pin-input').focus();
+    }
+
+    function closePinModal() {
+      document.getElementById('pin-modal').classList.add('hidden');
+    }
+
+    async function saveNewPin() {
+      const currentPin = document.getElementById('current-pin-input').value.trim();
+      const newPin = document.getElementById('new-pin-input').value.trim();
+
+      if (!/^\d{4,8}$/.test(newPin)) {
+        return alert("New PIN must be 4 to 8 numeric digits (0-9) so it works with the Lock Screen keypad.");
+      }
+
+      const res = await fetch('/api/settings/pin', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPin, newPin })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert("✅ Manager & Lock Screen PIN updated successfully!");
+        closePinModal();
+      } else {
+        alert("❌ " + (data.error || "Failed to update PIN."));
+      }
+    }
+
+    // ================= POS & INVENTORY LOGIC =================
+    async function loadProducts() {
+      const res = await fetch('/api/products');
+      products = await res.json();
+      updateLowStockAlerts();
+      renderCategoryTabs();
+      renderPosProducts();
+      renderInventory();
+    }
+
+    function updateLowStockAlerts() {
+      const lowItems = products.filter(p => p.stock_quantity <= p.reorder_level);
+      const badge = document.getElementById('low-stock-badge');
+      const banner = document.getElementById('inv-alert-banner');
+      const bannerText = document.getElementById('inv-alert-text');
+
+      if (lowItems.length > 0) {
+        badge.innerText = lowItems.length;
+        badge.classList.remove('hidden');
+        banner.classList.remove('hidden');
+        bannerText.innerText = `${lowItems.length} item(s) are at or below their reorder level!`;
+      } else {
+        badge.classList.add('hidden');
+        banner.classList.add('hidden');
+        showLowStockOnly = false;
+      }
+    }
+
+    function toggleLowStockFilter() {
+      showLowStockOnly = !showLowStockOnly;
+      const btn = document.getElementById('btn-low-stock-filter');
+      if (showLowStockOnly) {
+        btn.innerText = "Show All Products";
+        btn.className = "px-3 py-1 bg-gray-800 text-white text-xs font-bold rounded-lg hover:bg-gray-900 transition";
+      } else {
+        btn.innerText = "Show Low Stock Only";
+        btn.className = "px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-lg hover:bg-red-700 transition";
+      }
+      renderInventory();
+    }
+
+    function renderCategoryTabs() {
+      const categories = ['ALL', ...new Set(products.map(p => p.category || 'General'))];
+      const container = document.getElementById('pos-category-tabs');
+      container.innerHTML = categories.map(cat => {
+        const active = cat === selectedCategory;
+        return `
+          <button onclick="selectCategory('${cat.replace(/'/g, "\\'")}')" 
+            class="px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition shadow-sm ${
+              active ? 'bg-emerald-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+            }">
+            ${cat === 'ALL' ? 'All Items' : cat}
+          </button>
+        `;
+      }).join('');
+    }
+
+    function selectCategory(cat) {
+      selectedCategory = cat;
+      renderCategoryTabs();
+      renderPosProducts();
+    }
+
+    function clearPosSearch() {
+      document.getElementById('barcode-input').value = '';
+      selectedCategory = 'ALL';
+      renderCategoryTabs();
+      renderPosProducts();
+      document.getElementById('barcode-input').focus();
+    }
+
+    function switchTab(view) {
+      ['pos', 'inv', 'reports'].forEach(t => {
+        document.getElementById(`view-${t}`).classList.toggle('hidden', t !== view);
+        const navBtn = document.getElementById(`nav-${t}`);
+        if (t === 'inv') {
+          navBtn.className = t === view
+            ? "w-full flex items-center justify-between py-2.5 px-4 rounded-lg bg-emerald-600 font-medium text-white"
+            : "w-full flex items-center justify-between py-2.5 px-4 rounded-lg hover:bg-slate-800 text-gray-300 font-medium";
+        } else {
+          navBtn.className = t === view 
+            ? "w-full text-left py-2.5 px-4 rounded-lg bg-emerald-600 font-medium text-white"
+            : "w-full text-left py-2.5 px-4 rounded-lg hover:bg-slate-800 text-gray-300 font-medium";
+        }
+      });
+      if (view === 'pos' || view === 'inv') loadProducts();
+      if (view === 'reports') loadReports();
+    }
+
+    function setPaymentMethod(method) {
+      paymentMethod = method;
+      const styles = {
+        CASH: "py-1.5 rounded font-bold text-xs border bg-emerald-600 text-white border-emerald-600",
+        GCASH: "py-1.5 rounded font-bold text-xs border bg-blue-600 text-white border-blue-600",
+        MAYA: "py-1.5 rounded font-bold text-xs border bg-emerald-800 text-white border-emerald-800"
+      };
+      const inactive = "py-1.5 rounded font-bold text-xs border bg-white text-gray-700 border-gray-300 hover:bg-gray-100";
+
+      ['CASH', 'GCASH', 'MAYA'].forEach(m => {
+        document.getElementById(`pay-${m}`).className = (m === method) ? styles[m] : inactive;
+      });
+
+      const refBox = document.getElementById('ref-box');
+      if (method === 'GCASH' || method === 'MAYA') {
+        refBox.classList.remove('hidden');
+        const { total } = getCartTotals();
+        document.getElementById('tendered-amount').value = total > 0 ? total.toFixed(2) : '';
+        document.getElementById('payment-ref').focus();
+      } else {
+        refBox.classList.add('hidden');
+      }
+      calculateChange();
+    }
+
+    function toggleScPwdDiscount() {
+      isScPwdActive = !isScPwdActive;
+      const btn = document.getElementById('btn-sc-pwd');
+      if (isScPwdActive) {
+        btn.className = "px-2 py-0.5 text-[11px] font-bold border rounded bg-amber-500 text-white border-amber-600 transition";
+        const subtotal = cart.reduce((s, i) => s + (i.price * i.qty), 0);
+        document.getElementById('discount-input').value = (subtotal * 0.20).toFixed(2);
+      } else {
+        btn.className = "px-2 py-0.5 text-[11px] font-semibold border rounded bg-white hover:bg-gray-100 text-gray-700 transition";
+        document.getElementById('discount-input').value = '';
+      }
+      renderCart();
+    }
+
+    function manualDiscountChange() {
+      isScPwdActive = false;
+      document.getElementById('btn-sc-pwd').className = "px-2 py-0.5 text-[11px] font-semibold border rounded bg-white hover:bg-gray-100 text-gray-700 transition";
+      updateTotalsDisplay();
+    }
+
+    function getCartTotals() {
+      const subtotal = cart.reduce((s, i) => s + (i.price * i.qty), 0);
+      if (isScPwdActive) {
+        document.getElementById('discount-input').value = (subtotal * 0.20).toFixed(2);
+      }
+      const rawDiscount = parseFloat(document.getElementById('discount-input').value) || 0;
+      const discount = Math.min(subtotal, Math.max(0, rawDiscount));
+      const total = Math.max(0, subtotal - discount);
+      return { subtotal, discount, total };
+    }
+
+    function updateTotalsDisplay() {
+      const { subtotal, total } = getCartTotals();
+      document.getElementById('cart-subtotal').innerText = `₱${subtotal.toFixed(2)}`;
+      document.getElementById('cart-total').innerText = `₱${total.toFixed(2)}`;
+      if (paymentMethod === 'GCASH' || paymentMethod === 'MAYA') {
+        document.getElementById('tendered-amount').value = total > 0 ? total.toFixed(2) : '';
+      }
+      calculateChange();
+    }
+
+    function addToCart(id) {
+      const p = products.find(x => x.id === id);
+      if (!p || p.stock_quantity <= 0) return alert("Out of stock!");
+      const item = cart.find(i => i.id === id);
+      if (item) {
+        if (item.qty + 1 > p.stock_quantity) return alert("Not enough stock!");
+        item.qty++;
+      } else {
+        cart.push({ id: p.id, name: p.name, price: p.selling_price, qty: 1 });
+      }
+      renderCart();
+    }
+
+    function updateCartQty(id, delta) {
+      const idx = cart.findIndex(i => i.id === id);
+      if (idx > -1) {
+        const p = products.find(x => x.id === id);
+        cart[idx].qty += delta;
+        if (cart[idx].qty > p.stock_quantity) cart[idx].qty = p.stock_quantity;
+        if (cart[idx].qty <= 0) cart.splice(idx, 1);
+      }
+      renderCart();
+    }
+
+    function clearCart() {
+      cart = [];
+      isScPwdActive = false;
+      document.getElementById('discount-input').value = '';
+      document.getElementById('payment-ref').value = '';
+      document.getElementById('tendered-amount').value = '';
+      document.getElementById('btn-sc-pwd').className = "px-2 py-0.5 text-[11px] font-semibold border rounded bg-white hover:bg-gray-100 text-gray-700 transition";
+      setPaymentMethod('CASH');
+      renderCart();
+    }
+
+    function renderCart() {
+      const box = document.getElementById('cart-items');
+      updateTotalsDisplay();
+
+      if (!cart.length) {
+        box.innerHTML = `<div class="text-center text-gray-400 mt-12 text-sm">Cart is empty.</div>`;
+        return;
+      }
+      box.innerHTML = cart.map(i => `
+        <div class="flex items-center justify-between p-2 bg-gray-50 rounded border">
+          <div class="flex-1 pr-2">
+            <div class="font-medium text-sm truncate">${i.name}</div>
+            <div class="text-xs text-gray-500">₱${i.price.toFixed(2)}</div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button onclick="updateCartQty(${i.id}, -1)" class="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded font-bold">-</button>
+            <button onclick="openQtyModal(${i.id}, 'SET')" title="Click to type quantity"
+              class="px-2.5 h-6 bg-white border border-emerald-400 hover:bg-emerald-50 rounded text-sm font-extrabold text-emerald-700 shadow-sm">
+              ${i.qty}
+            </button>
+            <button onclick="updateCartQty(${i.id}, 1)" class="w-6 h-6 bg-gray-200 hover:bg-gray-300 rounded font-bold">+</button>
+          </div>
+          <div class="ml-3 font-semibold text-sm w-16 text-right">₱${(i.price * i.qty).toFixed(2)}</div>
+        </div>
+      `).join('');
+    }
+
+    function calculateChange() {
+      const { total } = getCartTotals();
+      const paid = parseFloat(document.getElementById('tendered-amount').value) || 0;
+      document.getElementById('cart-change').innerText = `₱${Math.max(0, paid - total).toFixed(2)}`;
+    }
+
+    function handleBarcodeScan(e) {
+      if (e.key === 'Enter') {
+        const q = e.target.value.trim().toLowerCase();
+        if (!q) return;
+        const exactBarcode = products.find(p => p.barcode.toLowerCase() === q);
+        const nameMatch = products.find(p => p.name.toLowerCase().includes(q));
+        const match = exactBarcode || nameMatch;
+
+        if (match) {
+          addToCart(match.id);
+          e.target.value = '';
+          renderPosProducts();
+        } else {
+          alert("Product not found.");
+        }
+      }
+    }
+
+    async function processCheckout() {
+      if (!cart.length) return alert("Cart is empty!");
+      const { subtotal, discount, total } = getCartTotals();
+      const paid = parseFloat(document.getElementById('tendered-amount').value) || 0;
+      if (paid < total) return alert("Insufficient amount tendered!");
+
+      const ref = document.getElementById('payment-ref').value.trim();
+      if ((paymentMethod === 'GCASH' || paymentMethod === 'MAYA') && !ref) {
+        if (!confirm(`No ${paymentMethod} reference number entered. Continue anyway?`)) return;
+      }
+
+      const finalMethodLabel = (paymentMethod !== 'CASH' && ref) ? `${paymentMethod} (#${ref})` : paymentMethod;
+      const change = paid - total;
+      const soldItems = [...cart];
+
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: soldItems,
+          subtotal,
+          discount,
+          total,
+          amount_paid: paid,
+          change_due: change,
+          payment_method: finalMethodLabel
+        })
+      });
+      const data = await res.json();
+
+      showReceiptModal(data.receipt_no, new Date().toLocaleString(), soldItems, subtotal, discount, total, paid, change, finalMethodLabel, 'COMPLETED');
+
+      clearCart();
+      loadProducts();
+    }
+
+    function showReceiptModal(receiptNo, dateStr, items, subtotal, discount, total, paid, change, methodLabel, status = 'COMPLETED') {
+      document.getElementById('rec-date').innerText = dateStr;
+      document.getElementById('rec-no').innerText = receiptNo;
+      document.getElementById('rec-void-banner').classList.toggle('hidden', status !== 'VOIDED');
+
+      document.getElementById('rec-items').innerHTML = items.map(i => `
+        <div>
+          <div class="truncate">${i.name}</div>
+          <div class="flex justify-between text-[11px] text-gray-700">
+            <span>${i.qty} x ₱${i.price.toFixed(2)}</span>
+            <span>₱${(i.qty * i.price).toFixed(2)}</span>
+          </div>
+        </div>
+      `).join('');
+      document.getElementById('rec-subtotal').innerText = `₱${(subtotal || total).toFixed(2)}`;
+      
+      const discRow = document.getElementById('rec-discount-row');
+      if (discount && discount > 0) {
+        discRow.classList.remove('hidden');
+        document.getElementById('rec-discount').innerText = `-₱${discount.toFixed(2)}`;
+      } else {
+        discRow.classList.add('hidden');
+      }
+
+      document.getElementById('rec-total').innerText = `₱${total.toFixed(2)}`;
+      document.getElementById('rec-method-label').innerText = `PAID (${methodLabel || 'CASH'}):`;
+      document.getElementById('rec-paid').innerText = `₱${paid.toFixed(2)}`;
+      document.getElementById('rec-change').innerText = `₱${change.toFixed(2)}`;
+
+      document.getElementById('receipt-modal').classList.remove('hidden');
+    }
+
+    async function reprintReceipt(saleId) {
+      const sale = salesList.find(s => s.id === saleId);
+      if (!sale) return;
+      const res = await fetch(`/api/sales/${saleId}/items`);
+      const items = await res.json();
+      showReceiptModal(sale.receipt_no, sale.created_at, items, sale.subtotal, sale.discount, sale.total, sale.amount_paid, sale.change_due, sale.payment_method, sale.status);
+    }
+
+    async function voidSale(saleId, receiptNo) {
+      const pin = prompt(`Enter Manager PIN to VOID ${receiptNo} and return items to stock:`);
+      if (!pin) return;
+
+      const res = await fetch(`/api/sales/${saleId}/void`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`Receipt ${receiptNo} has been VOIDED and items were returned to stock.`);
+        loadReports();
+        loadProducts();
+      } else {
+        alert(data.error || "Failed to void transaction.");
+      }
+    }
+
+    function closeReceiptModal() {
+      document.getElementById('receipt-modal').classList.add('hidden');
+      document.getElementById('barcode-input').focus();
+    }
+
+    function renderPosProducts() {
+      const searchVal = (document.getElementById('barcode-input')?.value || '').trim().toLowerCase();
+      const filtered = products.filter(p => {
+        const matchesCat = selectedCategory === 'ALL' || p.category === selectedCategory;
+        const matchesQuery = !searchVal || p.name.toLowerCase().includes(searchVal) || p.barcode.toLowerCase().includes(searchVal);
+        return matchesCat && matchesQuery;
+      });
+
+      const grid = document.getElementById('pos-product-grid');
+      if (filtered.length === 0) {
+        grid.innerHTML = `<div class="col-span-full text-center text-gray-400 py-12 text-sm">No matching products found.</div>`;
+        return;
+      }
+
+      grid.innerHTML = filtered.map(p => {
+        const isOut = p.stock_quantity <= 0;
+        const isLow = p.stock_quantity <= p.reorder_level;
+        return `
+          <div onclick="addToCart(${p.id})" class="p-4 bg-white border ${isOut ? 'opacity-50 border-gray-200' : 'border-gray-200 hover:border-emerald-500 hover:shadow-md'} rounded-xl cursor-pointer flex flex-col justify-between transition">
+            <div>
+              <div class="flex justify-between items-center">
+                <span class="text-[10px] bg-gray-100 px-2 py-0.5 rounded font-mono text-gray-600">${p.barcode}</span>
+                ${isLow ? `<span class="text-[10px] bg-red-100 text-red-600 font-bold px-1.5 py-0.5 rounded">${isOut ? 'OUT' : 'LOW'}</span>` : ''}
+              </div>
+              <h3 class="font-bold text-sm mt-2 text-gray-800">${p.name}</h3>
+              <div class="text-xs text-gray-400">${p.category}</div>
+            </div>
+            <div class="mt-4 flex justify-between items-center">
+              <span class="font-extrabold text-emerald-600">₱${p.selling_price.toFixed(2)}</span>
+              <div class="flex items-center gap-1">
+                <span class="text-xs px-2 py-0.5 rounded ${isLow ? 'bg-red-100 text-red-700 font-bold' : 'bg-gray-100 text-gray-700'}">
+                  ${p.stock_quantity}
+                </span>
+                ${!isOut ? `
+                  <button onclick="event.stopPropagation(); openQtyModal(${p.id}, 'ADD')" title="Enter custom quantity"
+                    class="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-600 hover:text-white text-emerald-700 border border-emerald-300 rounded text-xs font-extrabold transition">
+                    # Qty
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderInventory() {
+      const q = (document.getElementById('inv-search')?.value || '').trim().toLowerCase();
+      const filtered = products.filter(p => {
+        const matchesLow = !showLowStockOnly || (p.stock_quantity <= p.reorder_level);
+        const matchesSearch = !q || p.name.toLowerCase().includes(q) || p.barcode.toLowerCase().includes(q) || p.category.toLowerCase().includes(q);
+        return matchesLow && matchesSearch;
+      });
+
+      document.getElementById('inventory-table').innerHTML = filtered.map(p => {
+        const isOut = p.stock_quantity <= 0;
+        const isLow = p.stock_quantity <= p.reorder_level;
+        return `
+          <tr class="hover:bg-gray-50 border-b">
+            <td class="p-3 font-mono text-xs">${p.barcode}</td>
+            <td class="p-3 font-semibold">${p.name}</td>
+            <td class="p-3 text-gray-500">${p.category}</td>
+            <td class="p-3">₱${p.cost_price.toFixed(2)}</td>
+            <td class="p-3 font-bold">₱${p.selling_price.toFixed(2)}</td>
+            <td class="p-3 font-bold ${isLow ? 'text-red-600' : ''}">${p.stock_quantity}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded text-xs font-bold ${isOut ? 'bg-red-600 text-white' : isLow ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-700'}">
+                ${isOut ? 'Out of Stock' : isLow ? 'Low Stock' : 'In Stock'}
+              </span>
+            </td>
+            <td class="p-3 text-right space-x-2">
+              <button onclick="restock(${p.id})" class="text-emerald-600 font-medium hover:underline text-xs">+ Restock</button>
+              <button onclick="openProductModal(${p.id})" class="text-blue-600 font-medium hover:underline text-xs">Edit</button>
+              <button onclick="deleteProd(${p.id})" class="text-red-600 font-medium hover:underline text-xs">Delete</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    async function restock(id) {
+      const added = parseInt(prompt("Enter quantity to add to stock:"), 10);
+      if (added > 0) {
+        await fetch(`/api/products/${id}/restock`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ added })
+        });
+        loadProducts();
+      }
+    }
+
+    async function deleteProd(id) {
+      if (confirm("Delete this product from minimart.db?")) {
+        await fetch(`/api/products/${id}`, { method: 'DELETE' });
+        loadProducts();
+      }
+    }
+
+    function openProductModal(editId = null) {
+      const modal = document.getElementById('product-modal');
+      if (editId) {
+        const p = products.find(x => x.id === editId);
+        document.getElementById('modal-title').innerText = 'Edit Product';
+        document.getElementById('prod-id').value = p.id;
+        document.getElementById('prod-barcode').value = p.barcode;
+        document.getElementById('prod-name').value = p.name;
+        document.getElementById('prod-cost').value = p.cost_price;
+        document.getElementById('prod-price').value = p.selling_price;
+        document.getElementById('prod-stock').value = p.stock_quantity;
+        document.getElementById('prod-cat').value = p.category;
+      } else {
+        document.getElementById('modal-title').innerText = 'Add New Product';
+        document.getElementById('prod-id').value = '';
+        document.getElementById('prod-barcode').value = '';
+        document.getElementById('prod-name').value = '';
+        document.getElementById('prod-cost').value = '';
+        document.getElementById('prod-price').value = '';
+        document.getElementById('prod-stock').value = '';
+        document.getElementById('prod-cat').value = '';
+      }
+      modal.classList.remove('hidden');
+    }
+
+    function closeProductModal() {
+      document.getElementById('product-modal').classList.add('hidden');
+    }
+
+    async function saveProduct() {
+      const editId = document.getElementById('prod-id').value;
+      const payload = {
+        barcode: document.getElementById('prod-barcode').value.trim(),
+        name: document.getElementById('prod-name').value.trim(),
+        cost_price: parseFloat(document.getElementById('prod-cost').value) || 0,
+        selling_price: parseFloat(document.getElementById('prod-price').value) || 0,
+        stock_quantity: parseInt(document.getElementById('prod-stock').value, 10) || 0,
+        category: document.getElementById('prod-cat').value.trim() || 'General'
+      };
+      if (!name) {
+    alert('Product Name is required!');
+    return;
+}
+
+      const url = editId ? `/api/products/${editId}` : '/api/products';
+      const method = editId ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        closeProductModal();
+        loadProducts();
+      } else {
+        alert("Error saving product (Make sure Barcode is unique).");
+      }
+    }
+
+    let salesFilterMode = 'TODAY';
+
+    function setSalesFilter(mode) {
+      salesFilterMode = mode;
+      ['TODAY', 'YESTERDAY', 'WEEK', 'MONTH', 'ALL'].forEach(m => {
+        const btn = document.getElementById(`flt-${m}`);
+        if (btn) {
+          btn.className = (m === mode)
+            ? "px-3 py-1.5 rounded-lg font-bold bg-emerald-600 text-white"
+            : "px-3 py-1.5 rounded-lg font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700";
+        }
+      });
+      renderFilteredReports();
+    }
+
+    async function loadReports() {
+      const res = await fetch('/api/sales');
+      salesList = await res.json();
+      renderFilteredReports();
+    }
+
+    function renderFilteredReports() {
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+
+      const yesterday = new Date(now);
+      yesterday.setDate(now.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+      const weekAgo = new Date(now);
+      weekAgo.setDate(now.getDate() - 7);
+      const weekAgoStr = weekAgo.toISOString().slice(0, 10);
+
+      const monthPrefix = todayStr.slice(0, 7); // YYYY-MM
+      const startVal = document.getElementById('flt-start')?.value;
+      const endVal = document.getElementById('flt-end')?.value;
+
+      const filteredSales = salesList.filter(s => {
+        const saleDate = (s.created_at || '').slice(0, 10);
+        if (salesFilterMode === 'TODAY') return s.isToday === 1 || saleDate === todayStr;
+        if (salesFilterMode === 'YESTERDAY') return saleDate === yesterdayStr;
+        if (salesFilterMode === 'WEEK') return saleDate >= weekAgoStr;
+        if (salesFilterMode === 'MONTH') return saleDate.startsWith(monthPrefix);
+        if (salesFilterMode === 'CUSTOM') {
+          if (startVal && saleDate < startVal) return false;
+          if (endVal && saleDate > endVal) return false;
+          return true;
+        }
+        return true; // ALL
+      });
+
+      const validFiltered = filteredSales.filter(s => s.status !== 'VOIDED' && s.status !== 'REFUNDED');
+      const periodRev = validFiltered.reduce((sum, s) => sum + s.total, 0);
+      const periodProfit = validFiltered.reduce((sum, s) => sum + s.profit, 0);
+      const allValidRev = salesList.filter(s => s.status !== 'VOIDED' && s.status !== 'REFUNDED').reduce((sum, s) => sum + s.total, 0);
+
+      document.getElementById('stat-today-sales').innerText = `₱${periodRev.toFixed(2)}`;
+      document.getElementById('stat-today-profit').innerText = `₱${periodProfit.toFixed(2)}`;
+      document.getElementById('stat-today-orders').innerText = validFiltered.length;
+      document.getElementById('stat-all-sales').innerText = `₱${allValidRev.toFixed(2)}`;
+
+      document.getElementById('reports-table').innerHTML = filteredSales.map(s => {
+        const isVoided = s.status === 'VOIDED' || s.status === 'REFUNDED';
+        return `
+          <tr class="border-b hover:bg-gray-50 ${isVoided ? 'opacity-50 bg-red-50' : ''}">
+            <td class="p-3 font-mono font-bold ${isVoided ? 'line-through text-red-600' : ''}">${s.receipt_no}</td>
+            <td class="p-3 text-gray-500 text-xs">${s.created_at}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded text-xs font-semibold ${s.payment_method.includes('GCASH') ? 'bg-blue-100 text-blue-700' : s.payment_method.includes('MAYA') ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-700'}">
+                ${s.payment_method}
+              </span>
+            </td>
+            <td class="p-3 text-amber-600 font-medium">${s.discount > 0 ? '-₱' + s.discount.toFixed(2) : '—'}</td>
+            <td class="p-3 font-bold text-gray-800">₱${s.total.toFixed(2)}</td>
+            <td class="p-3 font-bold text-emerald-600">${isVoided ? '₱0.00' : '+₱' + s.profit.toFixed(2)}</td>
+            <td class="p-3">
+              <span class="px-2 py-0.5 rounded text-[11px] font-bold ${isVoided ? 'bg-red-600 text-white' : 'bg-emerald-100 text-emerald-700'}">
+                ${s.status}
+              </span>
+            </td>
+            <td class="p-3 text-right space-x-1">
+              <button onclick="reprintReceipt(${s.id})" class="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-xs font-medium text-gray-700">
+                🖨️ View
+              </button>
+              ${!isVoided ? `
+                <button onclick="openRefundModal(${s.id}, '${s.receipt_no}')" class="px-2 py-1 bg-amber-100 hover:bg-amber-200 rounded text-xs font-bold text-amber-800">
+                  ↩️ Refund
+                </button>
+                <button onclick="voidSale(${s.id}, '${s.receipt_no}')" class="px-2 py-1 bg-red-100 hover:bg-red-200 rounded text-xs font-bold text-red-700">
+                  🚫 Void
+                </button>
+              ` : ''}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    function exportInventoryCSV() {
+      const headers = ['Barcode', 'Name', 'Category', 'Cost Price', 'Selling Price', 'Stock Quantity', 'Reorder Level'];
+      const rows = products.map(p => [
+        `"${p.barcode}"`,
+        `"${p.name.replace(/"/g, '""')}"`,
+        `"${p.category}"`,
+        p.cost_price.toFixed(2),
+        p.selling_price.toFixed(2),
+        p.stock_quantity,
+        p.reorder_level
+      ]);
+      downloadCSV([headers.join(','), ...rows.map(r => r.join(','))].join('\n'), 'minimart-inventory.csv');
+    }
+
+    function exportSalesCSV() {
+      const headers = ['Receipt No', 'Date', 'Payment Method', 'Subtotal', 'Discount', 'Total Paid', 'Net Profit', 'Status'];
+      const rows = salesList.map(s => [
+        `"${s.receipt_no}"`,
+        `"${s.created_at}"`,
+        `"${s.payment_method}"`,
+        (s.subtotal || s.total).toFixed(2),
+        (s.discount || 0).toFixed(2),
+        s.total.toFixed(2),
+        s.status === 'VOIDED' ? '0.00' : s.profit.toFixed(2),
+        `"${s.status}"`
+      ]);
+      downloadCSV([headers.join(','), ...rows.map(r => r.join(','))].join('\n'), 'minimart-sales-report.csv');
+    }
+
+    function downloadCSV(csvContent, fileName) {
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+let todayExpenses = [];
+    let startingFund = parseFloat(localStorage.getItem('mm_starting_fund')) || 1000;
+
+    async function loadTodayExpenses() {
+      const res = await fetch('/api/expenses/today');
+      todayExpenses = await res.json();
+    }
+
+    async function recordExpensePrompt() {
+      const desc = prompt("Enter Expense / Cash-Out reason (e.g., Plastic bags, Ice, Lunch):");
+      if (!desc) return;
+      const amt = parseFloat(prompt("Enter Cash-Out Amount (₱):"));
+      if (!amt || amt <= 0) return alert("Invalid amount.");
+
+      await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description: desc.trim(), amount: amt })
+      });
+      alert(`Recorded Cash-Out: ₱${amt.toFixed(2)} for "${desc}"`);
+      loadReports();
+    }
+
+    async function openZReport() {
+      await loadTodayExpenses();
+      const newFund = prompt("Enter Starting Cash in Drawer (Change Fund) for today:", startingFund);
+      if (newFund === null) return;
+      startingFund = parseFloat(newFund) || 0;
+      localStorage.setItem('mm_starting_fund', startingFund);
+
+      const todayValid = salesList.filter(s => s.isToday === 1 && s.status !== 'VOIDED');
+      const todayVoided = salesList.filter(s => s.isToday === 1 && s.status === 'VOIDED');
+
+      const cashSales = todayValid.filter(s => s.payment_method === 'CASH').reduce((sum, s) => sum + s.total, 0);
+      const gcashSales = todayValid.filter(s => s.payment_method.includes('GCASH')).reduce((sum, s) => sum + s.total, 0);
+      const mayaSales = todayValid.filter(s => s.payment_method.includes('MAYA')).reduce((sum, s) => sum + s.total, 0);
+      const totalDiscounts = todayValid.reduce((sum, s) => sum + (s.discount || 0), 0);
+      const totalExpenses = todayExpenses.reduce((sum, e) => sum + e.amount, 0);
+      const netProfit = todayValid.reduce((sum, s) => sum + s.profit, 0) - totalExpenses;
+      const expectedCashInDrawer = startingFund + cashSales - totalExpenses;
+
+      // Render into the existing thermal receipt modal so you can print it directly
+      document.getElementById('rec-date').innerText = new Date().toLocaleString();
+      document.getElementById('rec-no').innerText = "=== END-OF-DAY Z-REPORT ===";
+      document.getElementById('rec-void-banner').classList.add('hidden');
+
+      document.getElementById('rec-items').innerHTML = `
+        <div class="space-y-1 text-[11px]">
+          <div class="flex justify-between"><span>Valid Orders:</span><span>${todayValid.length}</span></div>
+          <div class="flex justify-between"><span>Voided Orders:</span><span>${todayVoided.length}</span></div>
+          <div class="flex justify-between"><span>Discounts Given:</span><span>₱${totalDiscounts.toFixed(2)}</span></div>
+          <div class="border-t border-dashed border-gray-400 my-1 pt-1 font-bold">PAYMENT BREAKDOWN</div>
+          <div class="flex justify-between"><span>Cash Sales:</span><span>₱${cashSales.toFixed(2)}</span></div>
+          <div class="flex justify-between"><span>GCash Sales:</span><span>₱${gcashSales.toFixed(2)}</span></div>
+          <div class="flex justify-between"><span>Maya Sales:</span><span>₱${mayaSales.toFixed(2)}</span></div>
+          <div class="border-t border-dashed border-gray-400 my-1 pt-1 font-bold">CASH DRAWER AUDIT</div>
+          <div class="flex justify-between"><span>Starting Fund:</span><span>₱${startingFund.toFixed(2)}</span></div>
+          <div class="flex justify-between"><span>+ Cash Sales:</span><span>₱${cashSales.toFixed(2)}</span></div>
+          <div class="flex justify-between text-red-700"><span>- Cash-Out/Expenses:</span><span>-₱${totalExpenses.toFixed(2)}</span></div>
+        </div>
+      `;
+
+      document.getElementById('rec-subtotal').innerText = `₱${(cashSales + gcashSales + mayaSales).toFixed(2)}`;
+      document.getElementById('rec-discount-row').classList.add('hidden');
+      document.getElementById('rec-total').innerText = `₱${expectedCashInDrawer.toFixed(2)}`;
+      document.getElementById('rec-method-label').innerText = `NET PROFIT (AFTER EXP):`;
+      document.getElementById('rec-paid').innerText = `₱${netProfit.toFixed(2)}`;
+      document.getElementById('rec-change').innerText = `₱${totalExpenses.toFixed(2)} (Exp)`;
+
+      document.getElementById('receipt-modal').classList.remove('hidden');
+    }
+
+    async function openRefundModal(saleId, receiptNo) {
+      document.getElementById('refund-modal-title').innerText = `Refund Items (${receiptNo})`;
+      const res = await fetch(`/api/sales/${saleId}/items`);
+      const items = await res.json();
+
+      const container = document.getElementById('refund-items-list');
+      if (!items.length) {
+        container.innerHTML = `<div class="text-center text-gray-400 py-4">No refundable items left on this receipt.</div>`;
+      } else {
+        container.innerHTML = items.map(i => `
+          <div class="p-2.5 border rounded-lg bg-gray-50 flex items-center justify-between">
+            <div>
+              <div class="font-bold text-gray-800">${i.name}</div>
+              <div class="text-xs text-gray-500">Sold: <b>${i.qty}</b> @ ₱${i.price.toFixed(2)} each</div>
+            </div>
+            <button onclick="processItemRefund(${saleId}, ${i.sale_item_id}, ${i.product_id}, ${i.qty}, ${i.price}, '${i.name.replace(/'/g, "\\'")}')"
+              class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold shadow-sm">
+              Return Item
+            </button>
+          </div>
+        `).join('');
+      }
+      document.getElementById('refund-modal').classList.remove('hidden');
+    }
+
+    function closeRefundModal() {
+      document.getElementById('refund-modal').classList.add('hidden');
+    }
+
+    async function processItemRefund(saleId, saleItemId, productId, maxQty, unitPrice, itemName) {
+      const qtyStr = prompt(`How many "${itemName}" is the customer returning? (Max: ${maxQty})`, "1");
+      if (!qtyStr) return;
+      const returnQty = parseInt(qtyStr, 10);
+      if (isNaN(returnQty) || returnQty <= 0 || returnQty > maxQty) {
+        return alert(`Please enter a valid quantity between 1 and ${maxQty}.`);
+      }
+
+      const pin = prompt(`Enter Manager PIN to refund ${returnQty}x ${itemName} (₱${(returnQty * unitPrice).toFixed(2)}):`);
+      if (!pin) return;
+
+      const res = await fetch(`/api/sales/${saleId}/refund-item`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pin,
+          sale_item_id: saleItemId,
+          product_id: productId,
+          return_qty: returnQty,
+          unit_price: unitPrice
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`✅ Refund Processed!\n\nHand back to customer: ₱${data.refundAmount.toFixed(2)}\n${returnQty}x ${itemName} returned to inventory stock.`);
+        closeRefundModal();
+        loadReports();
+        loadProducts();
+      } else {
+        alert("❌ " + (data.error || "Refund failed."));
+      }
+    }
+
+    let storeConfig = JSON.parse(localStorage.getItem('mm_store_config')) || {
+      name: 'MINIMART POS',
+      address: 'Bacolod City, Negros Occidental',
+      contact: ''
+    };
+
+    function applyStoreHeaderToReceipt() {
+      const nameEl = document.getElementById('rec-store-name');
+      const addrEl = document.getElementById('rec-store-address');
+      const contEl = document.getElementById('rec-store-contact');
+      if (nameEl) nameEl.innerText = storeConfig.name || 'MINIMART POS';
+      if (addrEl) addrEl.innerText = storeConfig.address || '';
+      if (contEl) contEl.innerText = storeConfig.contact || '';
+    }
+
+    function openStoreSettingsModal() {
+      document.getElementById('set-store-name').value = storeConfig.name;
+      document.getElementById('set-store-address').value = storeConfig.address;
+      document.getElementById('set-store-contact').value = storeConfig.contact;
+      document.getElementById('store-settings-modal').classList.remove('hidden');
+    }
+
+    function closeStoreSettingsModal() {
+      document.getElementById('store-settings-modal').classList.add('hidden');
+    }
+
+    function saveStoreSettings() {
+      storeConfig = {
+        name: document.getElementById('set-store-name').value.trim() || 'MINIMART POS',
+        address: document.getElementById('set-store-address').value.trim(),
+        contact: document.getElementById('set-store-contact').value.trim()
+      };
+      localStorage.setItem('mm_store_config', JSON.stringify(storeConfig));
+      applyStoreHeaderToReceipt();
+      closeStoreSettingsModal();
+      alert("✅ Store Receipt Header saved!");
+    }
+
+    applyStoreHeaderToReceipt();
+
+
+    let qtyModalProductId = null;
+    let qtyModalMode = 'SET'; // 'SET' (from cart) or 'ADD' (from product grid)
+
+    function openQtyModal(productId, mode = 'SET') {
+      const p = products.find(x => x.id === productId);
+      if (!p || p.stock_quantity <= 0) return alert("Out of stock!");
+
+      qtyModalProductId = productId;
+      qtyModalMode = mode;
+
+      const existing = cart.find(i => i.id === productId);
+      const currentQty = (mode === 'SET' && existing) ? existing.qty : 1;
+
+      document.getElementById('qty-modal-title').innerText = p.name;
+      document.getElementById('qty-modal-stock').innerText = `Available Stock: ${p.stock_quantity}`;
+      const input = document.getElementById('qty-modal-input');
+      input.max = p.stock_quantity;
+      input.value = currentQty;
+
+      document.getElementById('qty-modal').classList.remove('hidden');
+      setTimeout(() => {
+        input.focus();
+        input.select();
+      }, 50);
+    }
+
+    function setModalQty(val) {
+      const input = document.getElementById('qty-modal-input');
+      input.value = val;
+      input.focus();
+    }
+
+    function closeQtyModal() {
+      document.getElementById('qty-modal').classList.add('hidden');
+      document.getElementById('barcode-input').focus();
+    }
+
+    function confirmQtyModal() {
+      const p = products.find(x => x.id === qtyModalProductId);
+      if (!p) return closeQtyModal();
+
+      const qty = parseInt(document.getElementById('qty-modal-input').value, 10);
+      if (isNaN(qty) || qty <= 0) {
+        cart = cart.filter(i => i.id !== qtyModalProductId);
+        renderCart();
+        return closeQtyModal();
+      }
+
+      const item = cart.find(i => i.id === qtyModalProductId);
+      const targetQty = (qtyModalMode === 'ADD' && item) ? (item.qty + qty) : qty;
+
+      if (targetQty > p.stock_quantity) {
+        alert(`Only ${p.stock_quantity} available in stock!`);
+        return;
+      }
+
+      if (item) {
+        item.qty = targetQty;
+      } else {
+        cart.push({ id: p.id, name: p.name, price: p.selling_price, qty: targetQty });
+      }
+
+      renderCart();
+      closeQtyModal();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (isScreenLocked) {
+        if (e.key >= '0' && e.key <= '9') {
+          appendPin(e.key);
+        } else if (e.key === 'Backspace') {
+          const input = document.getElementById('lock-pin-input');
+          input.value = input.value.slice(0, -1);
+        } else if (e.key === 'Enter') {
+          unlockScreen();
+        } else if (e.key === 'Escape') {
+          clearPin();
+        }
+        return;
+      }
+
+      if (e.key === 'F8') {
+        e.preventDefault();
+        holdCurrentOrder();
+      }
+      if (e.key === 'F9') {
+        e.preventDefault();
+        lockScreen();
+      }
+      if (e.key === 'F10') {
+        e.preventDefault();
+        processCheckout();
+      }
+      if (e.key === 'Escape') {
+        closeReceiptModal();
+        closeProductModal();
+        closePinModal();
+        closeHeldModal();
+      }
+    });
+
+    loadProducts();
+    renderCart();
+  </script>
+</body>
+</html>
