@@ -194,6 +194,105 @@ app.get('/api/sales', async (req, res) => {
   }
 });
 
+// 7. Get items for a specific sale (Required for viewing/reprinting receipts)
+app.get('/api/sales/:id/items', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from('sale_items')
+      .select('*, products(name)')
+      .eq('sale_id', id);
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 8. Void a sale and return items to stock
+app.post('/api/sales/:id/void', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { pin } = req.body;
+
+    // Optional PIN verification check (hardcoded or database)
+    if (pin !== '1234') {
+      return res.status(401).json({ error: 'Incorrect Manager PIN.' });
+    }
+
+    // Fetch sale items to return stock
+    const { data: items, error: itemsError } = await supabase
+      .from('sale_items')
+      .select('*')
+      .eq('sale_id', id);
+
+    if (itemsError) throw itemsError;
+
+    // Return stock for each item
+    for (const item of items) {
+      const { data: prod } = await supabase
+        .from('products')
+        .select('stock_quantity')
+        .eq('id', item.product_id)
+        .single();
+
+      if (prod) {
+        const restoredStock = (prod.stock_quantity || 0) + item.quantity;
+        await supabase
+          .from('products')
+          .update({ stock_quantity: restoredStock })
+          .eq('id', item.product_id);
+      }
+    }
+
+    // Mark sale as VOIDED
+    const { error: voidError } = await supabase
+      .from('sales')
+      .update({ status: 'VOIDED', profit: 0 })
+      .eq('id', id);
+
+    if (voidError) throw voidError;
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 9. Refund a specific item from a sale
+app.post('/api/sales/:id/refund-item', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { pin, product_id, return_qty, unit_price } = req.body;
+
+    if (pin !== '1234') {
+      return res.status(401).json({ error: 'Incorrect Manager PIN.' });
+    }
+
+    const refundAmount = return_qty * unit_price;
+
+    // Return stock to product inventory
+    const { data: prod } = await supabase
+      .from('products')
+      .select('stock_quantity')
+      .eq('id', product_id)
+      .single();
+
+    if (prod) {
+      const updatedStock = (prod.stock_quantity || 0) + return_qty;
+      await supabase
+        .from('products')
+        .update({ stock_quantity: updatedStock })
+        .eq('id', product_id);
+    }
+
+    res.json({ success: true, refundAmount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ================= SECURITY ROUTES =================
 
 // Store the PIN in a mutable variable in memory
@@ -218,6 +317,45 @@ app.put('/api/settings/pin', (req, res) => {
   // Update the active PIN
   CURRENT_ADMIN_PIN = newPin;
   res.json({ success: true });
+});
+
+// ================= EXPENSE ROUTES =================
+
+// 1. Get today's expenses for Z-Report
+app.get('/api/expenses/today', async (req, res) => {
+  try {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from('expenses')
+      .select('*')
+      .gte('created_at', `${todayStr}T00:00:00`)
+      .lte('created_at', `${todayStr}T23:59:59`);
+
+    if (error) {
+      // If the expenses table hasn't been created in Supabase yet, return empty array gracefully
+      if (error.code === '42P01') return res.json([]);
+      throw error;
+    }
+    res.json(data || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Record a new cash-out / expense
+app.post('/api/expenses', async (req, res) => {
+  try {
+    const { description, amount } = req.body;
+    const { data, error } = await supabase
+      .from('expenses')
+      .insert([{ description, amount: Number(amount) || 0 }])
+      .select();
+
+    if (error) throw error;
+    res.json(data[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Start Server (Supports both cloud environments and local testing)
