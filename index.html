@@ -1206,6 +1206,8 @@
       document.getElementById('product-modal').classList.add('hidden');
     }
 
+
+
     async function saveProduct() {
       const editId = document.getElementById('prod-id').value;
       const payload = {
@@ -1216,7 +1218,12 @@
         stock_quantity: parseInt(document.getElementById('prod-stock').value, 10) || 0,
         category: document.getElementById('prod-cat').value.trim() || 'General'
       };
-      if (!name) {
+
+      // Auto-generate a unique 13-digit barcode if left blank
+    if (!payload.barcode) {
+        payload.barcode = Date.now().toString(); 
+    }
+      if (!payload.name) {
     alert('Product Name is required!');
     return;
 }
